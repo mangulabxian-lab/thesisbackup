@@ -4,186 +4,6 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { createQuiz, updateQuiz, getQuizForEdit, deployExam, uploadFileAndParse } from '../lib/api';
 import './QuizFormPage.css';
 
-// ✅ ADD COMMENT API FUNCTIONS
-const getQuizComments = async (classId, examId) => {
-  const token = localStorage.getItem('token');
-  const response = await fetch(`/api/exams/${examId}/comments`, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
-  });
-  return response.json();
-};
-
-const addQuizComment = async (classId, examId, content) => {
-  const token = localStorage.getItem('token');
-  const response = await fetch(`/api/exams/${examId}/comments`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ content })
-  });
-  return response.json();
-};
-
-const deleteQuizComment = async (classId, examId, commentId) => {
-  const token = localStorage.getItem('token');
-  const response = await fetch(`/api/exams/${examId}/comments/${commentId}`, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
-  });
-  return response.json();
-};
-
-// ✅ TEACHER QUIZ COMMENT COMPONENT
-const TeacherQuizComments = ({ classId, quizId, user }) => {
-  const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  const loadComments = async () => {
-    if (!classId || !quizId) return;
-    
-    setLoading(true);
-    try {
-      const response = await getQuizComments(classId, quizId);
-      if (response.success) {
-        setComments(response.data || []);
-      }
-    } catch (error) {
-      console.error('Error loading comments:', error);
-      alert('Failed to load comments');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmitComment = async (e) => {
-    e.preventDefault();
-    if (!newComment.trim() || !classId || !quizId) return;
-
-    setSubmitting(true);
-    try {
-      const response = await addQuizComment(classId, quizId, newComment.trim());
-      
-      if (response.success) {
-        const comment = response.data;
-        setComments(prev => [comment, ...prev]);
-        setNewComment('');
-      }
-    } catch (error) {
-      console.error('Error submitting comment:', error);
-      alert('Failed to post comment. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDeleteComment = async (commentId) => {
-    if (!window.confirm('Are you sure you want to delete this comment?')) return;
-    
-    try {
-      const response = await deleteQuizComment(classId, quizId, commentId);
-      
-      if (response.success) {
-        setComments(prev => prev.filter(comment => comment._id !== commentId));
-      }
-    } catch (error) {
-      console.error('Error deleting comment:', error);
-      alert('Failed to delete comment.');
-    }
-  };
-
-  useEffect(() => {
-    loadComments();
-  }, [classId, quizId]);
-
-  // Add real-time updates with polling
-  useEffect(() => {
-    const interval = setInterval(loadComments, 5000); // Poll every 5 seconds
-    return () => clearInterval(interval);
-  }, [classId, quizId]);
-
-  return (
-    <div className="quiz-comments-section">
-      <div className="comments-header">
-        <h3>💬 Exam Discussion</h3>
-        <span className="comments-count">{comments.length} comments</span>
-      </div>
-
-      <form className="comment-form" onSubmit={handleSubmitComment}>
-        <textarea
-          value={newComment}
-          onChange={(e) => setNewComment(e.target.value)}
-          placeholder="Add a comment or instruction..."
-          rows="3"
-          maxLength="500"
-          className="comment-textarea"
-          disabled={submitting}
-        />
-        <div className="comment-actions">
-          <span className="char-count">{newComment.length}/500</span>
-          <button 
-            type="submit" 
-            className="submit-comment-btn"
-            disabled={!newComment.trim() || submitting}
-          >
-            {submitting ? 'Posting...' : 'Post Comment'}
-          </button>
-        </div>
-      </form>
-
-      <div className="comments-list">
-        {loading ? (
-          <div className="comments-loading">Loading comments...</div>
-        ) : comments.length === 0 ? (
-          <div className="no-comments">
-            <p>No comments yet</p>
-            <small>Start the discussion</small>
-          </div>
-        ) : (
-          comments.map((comment) => (
-            <div key={comment._id} className={`comment-item ${comment.role}`}>
-              <div className="comment-header">
-                <div className="comment-author">
-                  <span className="author-name">{comment.author?.name}</span>
-                  <span className={`author-role ${comment.role}`}>
-                    {comment.role === 'teacher' ? '👨‍🏫 Teacher' : '👨‍🎓 Student'}
-                  </span>
-                </div>
-                <div className="comment-meta">
-                  <span className="comment-time">
-                    {new Date(comment.createdAt).toLocaleTimeString()}
-                  </span>
-                  {(user.role === 'teacher' || comment.author?._id === user._id) && (
-                    <button 
-                      className="delete-comment-btn"
-                      onClick={() => handleDeleteComment(comment._id)}
-                      title="Delete comment"
-                    >
-                      🗑️
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="comment-content">
-                {comment.content}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-};
-
 const QuizFormPage = () => {
   const { classId, examId } = useParams();
   const navigate = useNavigate();
@@ -331,6 +151,51 @@ useEffect(() => {
       return `${secs}s`;
     }
   };
+
+  // ✅ ADD THE MISSING handleScheduleAssignment FUNCTION
+  const handleScheduleAssignment = async () => {
+    if (!scheduledDate || !scheduledTime) {
+      alert('Please select both date and time');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      // Combine date and time
+      const scheduledDateTime = new Date(`${scheduledDate}T${scheduledTime}:00`);
+      
+      // Save quiz with schedule data
+      const { savedExamId } = await saveQuizToBackend({
+        status: 'scheduled',
+        isDeployed: false,
+        scheduledAt: scheduledDateTime
+      });
+      
+      alert(`✅ Quiz scheduled for ${scheduledDateTime.toLocaleString()}`);
+      
+      setShowScheduleModal(false);
+      setScheduledDate("");
+      setScheduledTime("23:59");
+      
+      navigate('/dashboard', {
+        state: { 
+          selectedClassId: classId,
+          activeTab: 'classwork',
+          refresh: true,
+          showSuccess: true
+        },
+        replace: true
+      });
+      
+    } catch (error) {
+      console.error('Failed to schedule quiz:', error);
+      alert('Failed to schedule quiz: ' + (error.response?.data?.message || error.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
 // ✅ FIXED: UPDATED saveQuizToBackend function with duplicate prevention
 const saveQuizToBackend = async (extraFields = {}) => {
   // ✅ ADD: Prevent duplicate calls
@@ -594,7 +459,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
       const deployResponse = await deployExam(savedExamId);
       
       if (deployResponse.success) {
-        console.log("🚀 Quiz deployed successfully! Navigating to dashboard...");
+        console.log(" Quiz deployed successfully! Navigating to dashboard...");
         
         navigate('/dashboard', {
           state: { 
@@ -656,7 +521,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
             {showOptionsMenu && (
               <div className="options-dropdown">
                 <button onClick={() => handleOptionSelect('asynchronous')}>
-                  ⏱️ Asynchronous
+                   Asynchronous
                 </button>
                 <button onClick={() => handleOptionSelect('live-class')}>
                   🎥 Live Class
@@ -737,7 +602,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
   
   <div className="exam-type-display">
     Exam Type: <strong>
-      {examType === 'asynchronous' ? '⏱️ Asynchronous' : '🎥 Live Class'}
+      {examType === 'asynchronous' ? ' Asynchronous' : '🎥 Live Class'}
     </strong>
   </div>
   
@@ -786,16 +651,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
           </div>
         </div>
 
-        {/* ✅ ADDED TEACHER QUIZ COMMENTS SECTION */}
-        {(examId || quiz._id) && (
-          <div className="teacher-comments-section">
-            <TeacherQuizComments 
-              classId={classId} 
-              quizId={examId || quiz._id} 
-              user={user} 
-            />
-          </div>
-        )}
+        {/* ✅ REMOVED TEACHER QUIZ COMMENTS SECTION - Comments not needed */}
 
         <div className="questions-list">
           {quiz.questions.map((question, index) => (
@@ -830,7 +686,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
             onClick={handleDeployQuiz}
             disabled={loading || quiz.questions.length === 0}
           >
-            {loading ? 'Deploying...' : '🚀 Deploy Quiz'}
+            {loading ? 'Deploying...' : ' Deploy Quiz'}
           </button>
           <button 
             className="cancel-btn"
@@ -907,7 +763,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
   <div className="modal-overlay" onClick={() => setShowTimerModal(false)}>
     <div className="timer-modal" onClick={(e) => e.stopPropagation()}>
       <div className="modal-header">
-        <h2>⏱️ Set Exam Timer</h2>
+        <h2> Set Exam Timer</h2>
         <button 
           className="close-modal"
           onClick={() => setShowTimerModal(false)}
@@ -918,7 +774,7 @@ const saveQuizToBackend = async (extraFields = {}) => {
       
       <div className="modal-content">
         <div className="exam-type-info">
-          <p><strong>Exam Type:</strong> {examType === 'asynchronous' ? '⏱️ Asynchronous' : '🎥 Live Class'}</p>
+          <p><strong>Exam Type:</strong> {examType === 'asynchronous' ? ' Asynchronous' : '🎥 Live Class'}</p>
           {examType === 'live-class' && (
             <div className="live-class-note">
               <small>💡 Live Class: No timer needed. Students join in real-time session.</small>

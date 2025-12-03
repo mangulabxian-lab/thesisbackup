@@ -14,7 +14,7 @@ export default function RoleSelectionModal({ user, onRoleSelected }) {
     setError("");
     
     try {
-      console.log("🎯 Selecting role:", role, "for user:", user._id);
+      console.log("Selecting role:", role, "for user:", user._id);
       
       // Use the new role selection endpoint
       const response = await api.post("/auth/select-role", {

@@ -1,4 +1,4 @@
-// routes/examRoutes.js - FIXED VERSION
+// routes/examRoutes.js - FIXED VERSION WITH CORRECTED EXPORT GRADES
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
@@ -10,6 +10,7 @@ const auth = require("../middleware/authMiddleware");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const axios = require('axios');
+const User = require("../models/User");
 
 // ===== INITIALIZE ROUTER FIRST =====
 const router = express.Router();
@@ -199,7 +200,7 @@ router.delete("/:examId/comments/:commentId", async (req, res) => {
     await exam.save();
     
     res.json({
-      success: true,
+      success: false,
       message: "Comment deleted successfully"
     });
   } catch (err) {
@@ -1267,7 +1268,7 @@ router.post("/create/:classId", async (req, res) => {
   }
 });
 
-// ✅ UPDATE QUIZ QUESTIONS - UPDATED WITH EXAM TYPE
+// ✅ UPDATE QUIZ QUESTIONS - UPDATED WITH EXAM TYPE AND SCHEDULED AT
 router.put("/:examId/quiz-questions", async (req, res) => {
   try {
     const { examId } = req.params;
@@ -1281,10 +1282,11 @@ router.put("/:examId/quiz-questions", async (req, res) => {
       totalPoints,
       examType, // ✅ ADDED
       timeLimit, // ✅ ADDED
-      isLiveClass // ✅ ADDED
+      isLiveClass, // ✅ ADDED
+      scheduledAt // ✅ ADDED - New scheduledAt field
     } = req.body;
 
-    console.log("🎯 UPDATE QUIZ QUESTIONS ROUTE HIT:", examId, "Exam Type:", examType);
+    console.log("🎯 UPDATE QUIZ QUESTIONS ROUTE HIT:", examId, "Exam Type:", examType, "Scheduled At:", scheduledAt);
 
     // Validate examId
     if (!mongoose.Types.ObjectId.isValid(examId)) {
@@ -1335,6 +1337,15 @@ router.put("/:examId/quiz-questions", async (req, res) => {
       updateData.timeLimit = timeLimit;
     }
     if (isLiveClass !== undefined) updateData.isLiveClass = isLiveClass;
+    
+    // ✅ ADDED: Handle scheduledAt field
+    if (scheduledAt !== undefined) {
+      updateData.scheduledAt = scheduledAt;
+      if (scheduledAt > new Date()) {
+        updateData.status = 'scheduled';
+      }
+    }
+    
     if (isPublished !== undefined) {
       updateData.isPublished = isPublished;
       if (isPublished && !exam.publishedAt) {
@@ -1348,7 +1359,7 @@ router.put("/:examId/quiz-questions", async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    console.log("✅ Quiz updated successfully:", examId, "Type:", updatedExam.examType);
+    console.log("✅ Quiz updated successfully:", examId, "Type:", updatedExam.examType, "Scheduled At:", updatedExam.scheduledAt);
 
     res.json({
       success: true,
@@ -2294,6 +2305,191 @@ router.get('/:examId/type', async (req, res) => {
   }
 });
 
+// ✅ FIXED: EXPORT GRADES TO EXCEL (NOW EXCLUDES TEACHERS)
+router.get("/:classId/export-grades", async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const teacherId = req.user.id;
 
+    console.log("📊 EXPORT GRADES ROUTE HIT:", { classId, teacherId });
+
+    // Validate classId
+    if (!mongoose.Types.ObjectId.isValid(classId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid class ID format"
+      });
+    }
+
+    // Check if user is teacher for this class
+    const classData = await Class.findById(classId);
+    if (!classData) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found"
+      });
+    }
+
+    if (classData.ownerId.toString() !== teacherId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only teachers can export grades"
+      });
+    }
+
+    // ✅ FIXED: Get ONLY STUDENTS in class (exclude teachers)
+    const allMembers = classData.members || [];
+    
+    // Filter to get only students
+    const studentMembers = allMembers.filter(member => {
+      // Check if role is explicitly 'student'
+      if (member.role && member.role === "student") {
+        return true;
+      }
+      
+      // If role is undefined but they're not the teacher, assume student
+      if (!member.role && member.userId && member.userId.toString() !== classData.ownerId.toString()) {
+        return true;
+      }
+      
+      return false;
+    });
+
+    console.log("👥 Member filtering:", {
+      totalMembers: allMembers.length,
+      teacherId: classData.ownerId.toString(),
+      studentMembersCount: studentMembers.length,
+      teacherName: "J (teacher should be excluded)"
+    });
+
+    // Get student user details
+    const studentIds = studentMembers.map(m => m.userId);
+    let students = await User.find({ 
+      _id: { $in: studentIds } 
+    }).select('name email _id role');
+
+    // ✅ FINAL SANITY CHECK: Remove teacher if somehow included
+    students = students.filter(student => 
+      student._id.toString() !== classData.ownerId.toString()
+    );
+
+    console.log(`📊 Preparing export: ${students.length} students (teachers excluded), ${students.map(s => s.name)}`);
+
+    // Get all exams for this class
+    const exams = await Exam.find({ classId: classId })
+      .select('title totalPoints completedBy')
+      .populate('completedBy.studentId', 'name email');
+
+    console.log(`📊 Found ${exams.length} exams for export`);
+
+    // Format data for Excel
+    const exportData = {
+      headers: ['Student Name', 'Email'],
+      rows: [],
+      exams: exams.map(exam => ({
+        id: exam._id.toString(),
+        title: exam.title,
+        totalPoints: exam.totalPoints
+      }))
+    };
+
+    // Add exam headers
+    exams.forEach(exam => {
+      exportData.headers.push(`${exam.title} (${exam.totalPoints} points)`);
+    });
+    exportData.headers.push('Total Score', 'Average Percentage');
+
+    // Process each student
+    students.forEach(student => {
+      const row = [student.name || 'Unnamed Student', student.email || 'No email'];
+      let totalScore = 0;
+      let totalPossible = 0;
+      let examsTaken = 0;
+
+      exams.forEach(exam => {
+        const submission = exam.completedBy.find(sub => {
+          const studentId = sub.studentId?._id || sub.studentId;
+          return studentId && studentId.toString() === student._id.toString();
+        });
+
+        if (submission) {
+          const score = submission.score || 0;
+          const maxScore = submission.maxScore || exam.totalPoints || 0;
+          const percentage = maxScore > 0 ? (score / maxScore) * 100 : 0;
+          
+          row.push(`${score}/${maxScore} (${percentage.toFixed(2)}%)`);
+          totalScore += score;
+          totalPossible += maxScore;
+          examsTaken++;
+        } else {
+          row.push('Not submitted');
+        }
+      });
+
+      // Calculate totals
+      const totalPercentage = totalPossible > 0 ? (totalScore / totalPossible) * 100 : 0;
+      row.push(totalScore.toString(), `${totalPercentage.toFixed(2)}%`);
+
+      exportData.rows.push(row);
+    });
+
+    // Add class summary row
+    const summaryRow = ['CLASS SUMMARY', '', ...Array(exams.length).fill('---')];
+    
+    if (students.length > 0) {
+      // Calculate class averages per exam
+      const examAverages = exams.map(exam => {
+        const submissions = exam.completedBy || [];
+        if (submissions.length === 0) return 'No submissions';
+        
+        const totalScore = submissions.reduce((sum, sub) => sum + (sub.score || 0), 0);
+        const totalPossible = submissions.reduce((sum, sub) => 
+          sum + (sub.maxScore || exam.totalPoints || 0), 0
+        );
+        
+        const averagePercentage = totalPossible > 0 ? (totalScore / totalPossible) * 100 : 0;
+        return `${averagePercentage.toFixed(2)}%`;
+      });
+
+      summaryRow.splice(2, exams.length, ...examAverages);
+      
+      // Overall class average
+      const overallAverage = exportData.rows.reduce((sum, row) => {
+        const percentage = parseFloat(row[row.length - 1].replace('%', ''));
+        return sum + (isNaN(percentage) ? 0 : percentage);
+      }, 0) / students.length;
+
+      summaryRow.push('---', `${overallAverage.toFixed(2)}%`);
+    } else {
+      summaryRow.push('---', 'No students');
+    }
+
+    exportData.rows.push([]); // Empty row for separation
+    exportData.rows.push(summaryRow);
+
+    res.json({
+      success: true,
+      message: "Grades data prepared for export",
+      data: exportData,
+      metadata: {
+        classId: classId,
+        className: classData.name,
+        studentCount: students.length,
+        examCount: exams.length,
+        exportedAt: new Date().toISOString(),
+        teacherExcluded: true, // ✅ Added to confirm teacher is excluded
+        studentsExported: students.map(s => s.name)
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Export grades error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to export grades",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 module.exports = router;

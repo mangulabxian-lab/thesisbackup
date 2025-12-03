@@ -1,5 +1,5 @@
 // src/components/Dashboard.jsx - UPDATED WITH REAL-TIME LIVE CLASS SUPPORT
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react"; // ✅ ADDED React import
 import { useNavigate, useLocation } from "react-router-dom";
 import { FaPlus, FaHome, FaCalendarAlt, FaArchive, FaCog, FaSignOutAlt, FaBook, FaUserPlus, FaBars, FaChevronLeft, FaChevronRight, FaEdit, FaTrash, FaEllipsisV, FaChevronDown, FaEnvelope, FaUserMinus, FaVolumeMute, FaVolumeUp, FaSave, FaTimes, FaCheckCircle, FaClock, FaExclamationTriangle } from "react-icons/fa";
 import api, { 
@@ -10,6 +10,7 @@ import api, {
 } from "../lib/api";
 import "./Dashboard.css";
 import io from 'socket.io-client'; // ✅ ADDED: Import socket.io for real-time updates
+import * as XLSX from 'xlsx'; // ✅ ADDED: Import for Excel export
 
 // ✅ NOTIFICATION BELL IMPORT REMOVED
 // ✅ CHATFORUM IMPORT REMOVED
@@ -28,8 +29,8 @@ const getExamTypeDisplay = (exam) => {
     const timeLimit = exam.timeLimit || 60;
     return {
       type: 'async',
-      label: `⏱️ ${timeLimit} min`,
-      icon: '⏱️',
+      label: ` ${timeLimit} min`,
+      icon: '',
       color: 'bg-green-100 text-green-800 border border-green-200'
     };
   }
@@ -301,6 +302,113 @@ export default function Dashboard() {
   const teachingClasses = classes.filter(classData => classData.userRole === "teacher" || classData.isTeacher);
   const enrolledClasses = classes.filter(classData => classData.userRole === "student" || !classData.isTeacher);
   const allClasses = [...classes];
+
+  // ===== FIXED: JOIN CLASS FUNCTION WITH BETTER ERROR HANDLING =====
+  const joinClass = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.post("/class/join", { code: joinCode });
+      console.log('Join class response:', res.data);
+      
+      if (res.data.success) {
+        const joinedClass = res.data.data || res.data;
+        setClasses(prev => [...prev, { ...joinedClass, userRole: "student" }]);
+        setJoinCode("");
+        setShowJoinModal(false);
+        alert("✅ Successfully joined class!");
+        
+        // Refresh the classes list
+        try {
+          const classesRes = await api.get("/class/my-classes");
+          const classesData = classesRes.data.data || classesRes.data;
+          setClasses(classesData);
+        } catch (refreshError) {
+          console.error("Failed to refresh classes:", refreshError);
+        }
+      } else {
+        alert("❌ Failed to join class: " + res.data.message);
+      }
+    } catch (error) {
+      console.error("Join class error:", error);
+      alert("❌ Failed to join class: " + (error.response?.data?.message || "Invalid class code or server error"));
+    }
+  };
+
+  // ✅ ADDED: Excel Export Function
+  const exportGradesToExcel = async () => {
+    if (!selectedClass) return;
+    
+    try {
+      console.log("📤 Exporting grades for class:", selectedClass._id);
+      
+      // Show loading state
+      const response = await api.get(`/exams/${selectedClass._id}/export-grades`);
+      
+      if (response.data.success) {
+        const { data, metadata } = response.data;
+        
+        // Create workbook
+        const wb = XLSX.utils.book_new();
+        
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet([
+          // Header row 1: Class info
+          [`${metadata.className} - Grades Report`],
+          [`Exported on: ${new Date(metadata.exportedAt).toLocaleString()}`],
+          [`Students: ${metadata.studentCount} | Exams: ${metadata.examCount}`],
+          [], // Empty row
+          // Data headers
+          data.headers
+        ]);
+        
+        // Add student data
+        XLSX.utils.sheet_add_aoa(ws, data.rows, { origin: -1 });
+        
+        // Set column widths
+        const colWidths = data.headers.map((_, index) => ({
+          wch: index === 0 ? 25 : index === 1 ? 30 : 20
+        }));
+        ws['!cols'] = colWidths;
+        
+        // Add styles (bold header)
+        if (!ws['!merges']) ws['!merges'] = [];
+        ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: data.headers.length - 1 } });
+        
+        // Add to workbook
+        XLSX.utils.book_append_sheet(wb, ws, "Grades");
+        
+        // Create summary sheet
+        const summaryWs = XLSX.utils.aoa_to_sheet([
+          ["Class Summary", metadata.className],
+          ["Class Code", selectedClass.code],
+          ["Teacher", user.name],
+          ["Export Date", new Date(metadata.exportedAt).toLocaleString()],
+          [],
+          ["Statistics", "Value"],
+          ["Total Students", metadata.studentCount],
+          ["Total Exams", metadata.examCount],
+          [],
+          ["Exam List", "Total Points"],
+          ...data.exams.map(exam => [exam.title, exam.totalPoints])
+        ]);
+        
+        XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
+        
+        // Generate filename
+        const fileName = `Grades_${metadata.className.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        
+        // Save file
+        XLSX.writeFile(wb, fileName);
+        
+        alert(`✅ Grades exported successfully! File: ${fileName}`);
+      } else {
+        throw new Error(response.data.message || "Failed to export grades");
+      }
+    } catch (error) {
+      console.error("❌ Export error:", error);
+      alert(`❌ Failed to export grades: ${error.message}`);
+    }
+  };
 
   // ✅ ADDED: Real-time socket connection for live classes
   useEffect(() => {
@@ -1015,7 +1123,7 @@ const handleQuizAction = (exam) => {
 
   const handleStartExamSession = async (exam) => {
     try {
-      console.log("🚀 Starting exam session for:", exam._id);
+      console.log(" Starting exam session for:", exam._id);
       
       const response = await api.post(`/exams/${exam._id}/start-session`);
       
@@ -1456,7 +1564,7 @@ const handleQuizAction = (exam) => {
       if (selectedClassId && classes.length > 0) {
         const targetClass = classes.find(c => c._id === selectedClassId);
         if (targetClass) {
-          console.log("🎯 Selecting class from redirect:", targetClass.name);
+          console.log(" Selecting class from redirect:", targetClass.name);
           setSelectedClass(targetClass);
           
           if (activeTab) {
@@ -1466,7 +1574,7 @@ const handleQuizAction = (exam) => {
           
           if (showClasswork) {
             setActiveTab('classwork');
-            console.log("🎯 Forcing classwork tab");
+            console.log(" Forcing classwork tab");
           }
           
           if (refreshClasswork && activeTab === 'classwork') {
@@ -2080,7 +2188,7 @@ useEffect(() => {
     }
   };
 
-  // ===== CLASS CREATION AND JOINING =====
+  // ===== CLASS CREATION =====
   const createClass = async (e) => {
     e.preventDefault();
     try {
@@ -2095,22 +2203,8 @@ useEffect(() => {
     }
   };
 
-  const joinClass = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await api.post("/class/join", { code: joinCode });
-      const joinedClass = res.data.data || res.data;
-      setClasses([...classes, { ...joinedClass, userRole: "student" }]);
-      setJoinCode("");
-      setShowJoinModal(false);
-      alert("Successfully joined class!");
-    } catch (error) {
-      alert(error.response?.data?.message || "Failed to join class");
-    }
-  };
-
   const handleSelectClass = async (classData) => {
-    console.log("🎯 Selecting class:", classData.name);
+    console.log(" Selecting class:", classData.name);
     setSelectedClass(classData);
     setActiveTab("classwork");
     
@@ -2415,359 +2509,199 @@ useEffect(() => {
     );
   };
 
-  // ===== GRADES TAB RENDERER =====
-  const renderGradesTab = () => {
-    
-    if (!selectedClass) return null;
+// ===== GRADES TAB RENDERER =====
+const renderGradesTab = () => {
+  if (!selectedClass) return null;
 
-    // ---- STUDENT VIEW: personal gradebook ----
-    if (selectedClass.userRole === "student") {
-      if (loadingCompleted) {
-        return (
-          <div className="grades-tab">
-            <div className="loading">Loading grades...</div>
-          </div>
-        );
-      }
+  // ---- STUDENT VIEW: personal gradebook ----
+  if (selectedClass.userRole === "student") {
+    // ... (keep existing student view code)
+  }
 
-      if (!completedExams || completedExams.length === 0) {
-        return (
-          <div className="grades-tab">
-            <div className="grades-empty">
-              <h3>Your grades</h3>
-              <p>Once you complete a quiz or exam, your score will appear here.</p>
-            </div>
-          </div>
-        );
-      }
-
-      return (
-        <div className="grades-tab">
-          <div className="grades-header">
-            <h3>Your grades</h3>
-            <p>Scores for quizzes and exams in this class.</p>
-          </div>
-
-          <div className="grades-section">
-            <table className="grades-table">
-              <thead>
-                <tr>
-                  <th>Quiz / Exam</th>
-                  <th>Score</th>
-                  <th>%</th>
-                  <th>Completed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {completedExams.map((exam) => (
-                  <tr key={exam._id}>
-                    <td>{exam.title || "Untitled exam"}</td>
-                    <td>
-                      {exam.score !== undefined && exam.maxScore
-                        ? `${exam.score}/${exam.maxScore}`
-                        : exam.score !== undefined
-                        ? exam.score
-                        : "-"}
-                    </td>
-                    <td>
-                      {exam.percentage !== undefined &&
-                      exam.percentage !== null
-                        ? `${exam.percentage.toFixed(1)}%`
-                        : "-"}
-                    </td>
-                    <td>
-                      {exam.completedAt
-                        ? new Date(exam.completedAt).toLocaleString()
-                        : "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      );
-    }
-
-    // ---- TEACHER VIEW ----
-    if (gradesLoading) {
-      return (
-        <div className="grades-tab">
-          <div className="loading">Loading grades.</div>
-        </div>
-      );
-    }
-
-    // LEVEL 2 / 3 detail views
-    if (gradesView === "exam" && selectedExamId) {
-      return renderExamDetails();
-    }
-
-    if (gradesView === "student" && selectedStudentId) {
-      return renderStudentDetails();
-    }
-
-    const { exams, students, examStats } = gradesData;
-
-    if (!exams || exams.length === 0 || !students || students.length === 0) {
-      return (
-        <div className="grades-tab">
-          <div className="grades-empty">
-            <h3>Grades</h3>
-            <p>
-              No grades yet. When students start submitting quizzes/exams, this
-              gradebook will show their scores.
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    // helper to split name into first/last (for sorting)
-    const getNameParts = (raw) => {
-      const text = (raw || "").trim();
-      if (!text) return { first: "", last: "" };
-
-      const parts = text.split(/\s+/);
-      if (parts.length === 1) {
-        return { first: parts[0], last: parts[0] };
-      }
-      return {
-        first: parts[0],
-        last: parts[parts.length - 1],
-      };
-    };
-
-    // Sort students by selected option
-    const sortedStudents = [...students].sort((a, b) => {
-      const aName = a.name || a.email || "";
-      const bName = b.name || b.email || "";
-
-      const aParts = getNameParts(aName);
-      const bParts = getNameParts(bName);
-
-      if (gradeSortBy === "firstName") {
-        return aParts.first.localeCompare(bParts.first);
-      }
-      // default: last name
-      return aParts.last.localeCompare(bParts.last);
-    });
-
-    const getExamStat = (examId) =>
-      examStats.find((e) => e.examId === examId) || null;
-
-    const getSubmissionFor = (exam, studentId) => {
-      const submissions = exam.completedBy || [];
-      return submissions.find((s) => {
-        const id = (s.studentId && s.studentId._id) || s.studentId;
-        return id && id.toString() === studentId;
-      });
-    };
-
+  // ---- TEACHER VIEW ----
+  if (gradesLoading) {
     return (
       <div className="grades-tab">
-        <div className="grades-header">
+        <div className="loading">Loading grades.</div>
+      </div>
+    );
+  }
+
+  // LEVEL 2 / 3 detail views
+  if (gradesView === "exam" && selectedExamId) {
+    return renderExamDetails();
+  }
+
+  if (gradesView === "student" && selectedStudentId) {
+    return renderStudentDetails();
+  }
+
+  const { exams, students, examStats } = gradesData;
+
+  if (!exams || exams.length === 0 || !students || students.length === 0) {
+    return (
+      <div className="grades-tab">
+        <div className="grades-empty">
           <h3>Grades</h3>
           <p>
-            Gradebook for this class. Click a quiz title or student name for
-            more details.
+            No grades yet. When students start submitting quizzes/exams, this
+            gradebook will show their scores.
           </p>
         </div>
+      </div>
+    );
+  }
 
-        {/* Toolbar like Google Classroom */}
-        <div className="gradebook-toolbar">
-          <div className="gradebook-sort">
-            <button
-              type="button"
-              className="sort-by-btn"
-              onClick={() => setShowSortMenu((open) => !open)}
-            >
-              Sort by {gradeSortBy === "lastName" ? "last name" : "first name"} ▾
-            </button>
+  // Prepare student data with exam scores
+  const studentRows = students.map(student => {
+    const examScores = {};
+    exams.forEach(exam => {
+      const submissions = exam.completedBy || [];
+      const submission = submissions.find(s => {
+        const id = (s.studentId && s.studentId._id) || s.studentId;
+        return id && id.toString() === student._id;
+      });
+      examScores[exam._id] = submission ? submission.score : null;
+    });
+    
+    return {
+      ...student,
+      examScores
+    };
+  });
 
-            {showSortMenu && (
-              <div className="sort-menu">
-                <button
-                  type="button"
-                  className="sort-menu-item"
-                  onClick={() => {
-                    setGradeSortBy("lastName");
-                    setShowSortMenu(false);
-                  }}
-                >
-                  Sort by last name
-                </button>
-                <button
-                  type="button"
-                  className="sort-menu-item"
-                  onClick={() => {
-                    setGradeSortBy("firstName");
-                    setShowSortMenu(false);
-                  }}
-                >
-                  Sort by first name
-                </button>
-              </div>
-            )}
-          </div>
+  return (
+    <div className="grades-tab">
+      <div className="grades-header">
+        <h3>Grades</h3>
+        <p>
+          Gradebook for this class. Click a quiz title or student name for
+          more details.
+        </p>
+      </div>
 
-          {gradesData.overall && (
-            <div className="gradebook-overall">
-              Class average:&nbsp;
-              <strong>{gradesData.overall.average.toFixed(1)}%</strong>
+      {/* Toolbar like Google Classroom */}
+      <div className="gradebook-toolbar">
+        <div className="gradebook-sort">
+          <button
+            type="button"
+            className="sort-by-btn"
+            onClick={() => setShowSortMenu((open) => !open)}
+          >
+            Sort by {gradeSortBy === "lastName" ? "last name" : "first name"} ▾
+          </button>
+
+          {showSortMenu && (
+            <div className="sort-menu">
+              <button
+                type="button"
+                className="sort-menu-item"
+                onClick={() => {
+                  setGradeSortBy("lastName");
+                  setShowSortMenu(false);
+                }}
+              >
+                Sort by last name
+              </button>
+              <button
+                type="button"
+                className="sort-menu-item"
+                onClick={() => {
+                  setGradeSortBy("firstName");
+                  setShowSortMenu(false);
+                }}
+              >
+                Sort by first name
+              </button>
             </div>
           )}
         </div>
 
-        <div className="gradebook-table-container">
-          <table className="gradebook-table">
-            <thead>
-              <tr>
-                {/* sticky student column */}
-                <th className="sticky-col">
-                  <div className="student-col-header">
-                    Students
-                  </div>
+        {/* Export Button */}
+        <button
+          className="export-grades-btn"
+          onClick={exportGradesToExcel}
+          title="Export grades to Excel"
+        >
+          <svg className="export-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Export to Excel
+        </button>
+
+        {gradesData.overall && (
+          <div className="gradebook-overall">
+            Class average:&nbsp;
+            <strong>{gradesData.overall.average.toFixed(1)}%</strong>
+          </div>
+        )}
+      </div>
+
+      {/* FIXED: PROPER TABLE STRUCTURE - Using Table Instead of Grid for Better Alignment */}
+      <div className="grades-table-container">
+        <table className="grades-table-fixed">
+          <thead>
+            <tr>
+              <th className="grades-th students-th">Students</th>
+              {exams.map((exam) => (
+                <th key={exam._id} className="grades-th exam-th">
+                  {exam.title}
+                  <div className="exam-points">out of {exam.totalPoints}</div>
                 </th>
-
-                {exams.map((exam) => {
-                  const examStat = getExamStat(exam._id);
-                  const dateText = exam.createdAt
-                    ? new Date(exam.createdAt).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                      })
-                    : "";
-                  const maxPoints =
-                    exam.totalPoints ||
-                    exam.maxScore ||
-                    examStat?.highest ||
-                    10;
-
-                  return (
-                    <th key={exam._id}>
-                      <div className="gradebook-exam-header">
-                        <span className="exam-date">{dateText}</span>
-                        <button
-                          className="exam-title-btn"
-                          onClick={() => {
-                            setSelectedExamId(exam._id);
-                            setGradesView("exam");
-                          }}
-                        >
-                          {exam.title || "Quiz / Exam"}
-                        </button>
-                        <span className="exam-maxpoints">
-                          out of {maxPoints}
-                        </span>
-                      </div>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-
-            <tbody>
-              {/* Class average row (first row, like in screenshot) */}
-              <tr className="gradebook-class-average-row">
-                <td className="sticky-col">
-                  <span className="class-average-label">Class average</span>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {/* Class Average Row - This should be FIRST */}
+            <tr className="class-average-row">
+              <td className="grades-td average-label">Class average</td>
+              {examStats.map((exam) => (
+                <td key={exam.examId} className="grades-td average-value">
+                  {exam.average ? `${exam.average.toFixed(1)}%` : '—'}
+                </td>
+              ))}
+            </tr>
+            
+            {/* Student Rows */}
+            {studentRows.map((student) => (
+              <tr key={student._id} className="student-row">
+                <td className="grades-td student-info-cell">
+                  <div className="student-info-wrapper">
+                    <img 
+                      src={student.profileImage || `https://ui-avatars.com/api/?name=${encodeURIComponent(student.name || student.email)}&background=4285f4&color=fff`}
+                      className="student-avatar"
+                      alt={student.name || student.email}
+                    />
+                    <div className="student-name-email">
+                      <div className="student-name">{student.name || student.email}</div>
+                      <div className="student-email">{student.email}</div>
+                    </div>
+                  </div>
                 </td>
                 {exams.map((exam) => {
-                  const stat = getExamStat(exam._id);
+                  const score = student.examScores[exam._id];
                   return (
-                    <td key={exam._id}>
-                      {stat && stat.average != null
-                        ? `${stat.average.toFixed(1)}%`
-                        : "—"}
+                    <td key={exam._id} className="grades-td score-cell">
+                      {score == null ? (
+                        <span className="grade-missing">Missing</span>
+                      ) : (
+                        <span className="grade-score">
+                          {score}/{exam.totalPoints}
+                        </span>
+                      )}
                     </td>
                   );
                 })}
               </tr>
-
-              {/* One row per student */}
-              {sortedStudents.map((student) => (
-                <tr key={student._id}>
-                  <td className="sticky-col">
-                    <button
-                      className="student-cell"
-                      onClick={() => {
-                        setSelectedStudentId(student._id);
-                        setGradesView("student");
-                      }}
-                    >
-                      <div className="student-avatar">
-                        <img
-                          src={
-                            student.profileImage ||
-                            `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                              student.name || student.email || "Student"
-                            )}&background=4285f4&color=ffffff`
-                          }
-                          alt={student.name || student.email}
-                        />
-                      </div>
-                      <span className="student-name">
-                        {student.name || student.email}
-                      </span>
-                    </button>
-                  </td>
-
-                  {exams.map((exam) => {
-                    const sub = getSubmissionFor(exam, student._id);
-
-                    let scoreText = "—";
-                    let statusText = "Missing";
-                    let statusClass = "grade-cell-missing";
-
-                    if (sub) {
-                      const maxScore =
-                        sub.maxScore || exam.totalPoints || 0;
-                      const score =
-                        sub.score !== undefined && sub.score !== null
-                          ? sub.score
-                          : null;
-
-                      let pct = sub.percentage;
-                      if (
-                        (pct === undefined || pct === null) &&
-                        maxScore > 0 &&
-                        score !== null
-                      ) {
-                        pct = (score / maxScore) * 100;
-                      }
-
-                      scoreText =
-                        score !== null && maxScore
-                          ? `${score}/${maxScore}`
-                          : score !== null
-                          ? score
-                          : "—";
-
-                      statusText =
-                        pct !== undefined && pct !== null
-                          ? `${pct.toFixed(1)}%`
-                          : "Completed";
-                      statusClass = "grade-cell-completed";
-                    }
-
-                    return (
-                      <td key={exam._id}>
-                        <div className={`grade-cell ${statusClass}`}>
-                          <div className="grade-score">{scoreText}</div>
-                          <div className="grade-status">{statusText}</div>
-                        </div>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
-    );
-  };
+    </div>
+  );
+};
+
+       
 
   // ===== TO DO TAB RENDERER =====
   const renderToDoTab = () => {
@@ -2965,10 +2899,7 @@ useEffect(() => {
     return (
       <div className="todo-tab">
         <div className="todo-header-section">
-          <h2 className="todo-title">To do</h2>
-          <p className="todo-subtitle">
-            All your assignments and exams in one place
-          </p>
+          
         </div>
 
         {/* Tabs */}
@@ -3246,7 +3177,7 @@ useEffect(() => {
     const isAnnouncementCreator = announcement.createdBy?._id === currentUserId;
     const canEditDelete = isAnnouncementCreator || isTeacher;
     
-    console.log("🎯 ANNOUNCEMENT CARD RENDERED:", {
+    console.log(" ANNOUNCEMENT CARD RENDERED:", {
       announcementId: announcement._id,
       currentUserId,
       isAnnouncementCreator,
@@ -3301,7 +3232,7 @@ useEffect(() => {
         content: localEditContent.trim()
       };
       
-      console.log("🚀 Calling updateAnnouncement API...");
+      console.log(" Calling updateAnnouncement API...");
       const response = await updateAnnouncement(announcement._id, updateData);
       console.log("✅ EDIT API RESPONSE RECEIVED:", response);
 
@@ -4067,6 +3998,133 @@ useEffect(() => {
     );
   };
 
+  // ✅ ADDED: JOIN CLASS MODAL COMPONENT
+  const JoinModal = () => {
+    if (!showJoinModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div className="flex items-center space-x-3 mb-4">
+            <div className="flex-shrink-0">
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <FaUserPlus className="w-5 h-5 text-blue-600" />
+              </div>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Join Class</h3>
+              <p className="text-sm text-gray-600">Enter a class code to join</p>
+            </div>
+          </div>
+          
+          <form onSubmit={joinClass}>
+            <div className="mb-4">
+              <label htmlFor="joinCode" className="block text-sm font-medium text-gray-700 mb-2">
+                Class Code
+              </label>
+              <input
+                type="text"
+                id="joinCode"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                placeholder="Enter 6-digit class code"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+                maxLength={6}
+                pattern="[A-Z0-9]{6}"
+                title="Enter a 6-digit class code (letters and numbers only)"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the code provided by your teacher. Format: 6 letters/numbers.
+              </p>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowJoinModal(false);
+                  setJoinCode("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                Join Class
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  // ✅ ADDED: CREATE CLASS MODAL COMPONENT
+  const CreateClassModal = () => {
+    if (!showCreateModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div className="flex items-center space-x-3 mb-4">
+            <div className="flex-shrink-0">
+              <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                <FaBook className="w-5 h-5 text-green-600" />
+              </div>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Create Class</h3>
+              <p className="text-sm text-gray-600">Create a new class for your students</p>
+            </div>
+          </div>
+          
+          <form onSubmit={createClass}>
+            <div className="mb-4">
+              <label htmlFor="className" className="block text-sm font-medium text-gray-700 mb-2">
+                Class Name
+              </label>
+              <input
+                type="text"
+                id="className"
+                value={className}
+                onChange={(e) => setClassName(e.target.value)}
+                placeholder="Enter class name (e.g., Math 101)"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                This will be the name students see when joining your class.
+              </p>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setClassName("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                Create Class
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
   // UNENROLL CONFIRMATION MODAL
   const UnenrollModal = () => {
     if (!showUnenrollModal || !classToUnenroll) return null;
@@ -4547,6 +4605,7 @@ useEffect(() => {
                 {examTypeDisplay.icon} {examTypeDisplay.label}
               </span>
             </div>
+            
             <div className="exam-title-section">
               <h3 className="exam-title">{exam.title}</h3>
               {exam.description && (
@@ -4557,18 +4616,42 @@ useEffect(() => {
               </div>
             </div>
             
-            {/* TEACHER ACTIONS */}
+            {/* ✅ FIXED: TEACHER ACTIONS - PROPERLY POSITIONED */}
             {selectedClass?.userRole === "teacher" && (
               <div className="exam-actions-dropdown">
                 <button 
                   className="exam-menu-btn"
                   onClick={(e) => toggleQuizMenu(exam._id, e)}
+                  style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    zIndex: 10,
+                    background: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '4px',
+                    padding: '4px 8px',
+                    cursor: 'pointer'
+                  }}
                 >
                   <FaEllipsisV />
                 </button>
                 
                 {showQuizMenu === exam._id && (
-                  <div className="exam-menu-dropdown">
+                  <div 
+                    className="exam-menu-dropdown"
+                    style={{
+                      position: 'absolute',
+                      top: '35px',
+                      right: '10px',
+                      zIndex: 20,
+                      background: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '6px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                      minWidth: '150px'
+                    }}
+                  >
                     <button 
                       className="exam-menu-item"
                       onClick={(e) => {
@@ -4654,7 +4737,7 @@ useEffect(() => {
               <span className="exam-type">{exam.examType === 'live-class' ? 'Live Class' : 'Async Quiz'}</span>
               {exam.examType === 'asynchronous' && (
                 <span className="exam-duration">
-                  ⏱️ {exam.timeLimit || 60} minutes
+                   {exam.timeLimit || 60} minutes
                 </span>
               )}
               {exam.scheduledDate && (
@@ -4696,8 +4779,7 @@ useEffect(() => {
     </button>
   ) : (
     // Teacher async quiz - no button or show "View" button
-    <div className="no-action-message">
-      <span className="info-text">👀 View Only</span>
+    <div>
     </div>
   )}
 
@@ -4760,8 +4842,7 @@ useEffect(() => {
                 )}
               </div>
             ) : (
-              <div className="student-indicator">
-                👨‍🎓 You are viewing this class as a <strong>student</strong>.
+              <div >
               </div>
             )}
           </div>
@@ -4869,7 +4950,7 @@ useEffect(() => {
                   className={`classroom-tab ${activeTab === "classwork" ? "active" : ""}`}
                   onClick={() => setActiveTab("classwork")}
                 >
-                  Classwork
+                  Stream
                 </button>
                 {/* ✅ ADD TO DO TAB FOR STUDENTS */}
                 <button 
@@ -5086,44 +5167,60 @@ useEffect(() => {
         </div>
 
         <div className="header-right">
-          {/* CREATE/JOIN DROPDOWN */}
-          <div className="plus-btn-container" ref={createJoinDropdownRef}>
-            <button 
-              className="plus-btn"
-              onClick={() => setShowCreateJoinDropdown(!showCreateJoinDropdown)}
-            >
-              <FaPlus className="plus-icon" />
-            </button>
-            {showCreateJoinDropdown && (
-              <div className="create-join-dropdown">
-                {userRole === "teacher" && (
-                  <button 
-                    className="create-join-item"
-                    onClick={() => {
-                      setShowCreateModal(true);
-                      setShowCreateJoinDropdown(false);
-                    }}
-                  >
-                    <FaBook className="create-join-icon" />
-                    Create Class
-                  </button>
-                )}
-                
-                {userRole === "student" && (
-                  <button 
-                    className="create-join-item"
-                    onClick={() => {
-                      setShowJoinModal(true);
-                      setShowCreateJoinDropdown(false);
-                    }}
-                  >
-                    <FaUserPlus className="create-join-icon" />
-                    Join Class
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          {/* ✅ FIXED: CREATE/JOIN DROPDOWN - ONLY SHOW ON HOMEPAGE */}
+          {!selectedClass && (
+            <div className="plus-btn-container" ref={createJoinDropdownRef}>
+              <button 
+                className="plus-btn"
+                onClick={() => setShowCreateJoinDropdown(!showCreateJoinDropdown)}
+              >
+                <FaPlus className="plus-icon" />
+              </button>
+              {showCreateJoinDropdown && (
+                <div className="create-join-dropdown">
+                  {userRole === "teacher" && (
+                    <button 
+                      className="create-join-item"
+                      onClick={() => {
+                        setShowCreateModal(true);
+                        setShowCreateJoinDropdown(false);
+                      }}
+                    >
+                      <FaBook className="create-join-icon" />
+                      Create Class
+                    </button>
+                  )}
+                  
+                  {userRole === "student" && (
+                    <button 
+                      className="create-join-item"
+                      onClick={() => {
+                        setShowJoinModal(true);
+                        setShowCreateJoinDropdown(false);
+                      }}
+                    >
+                      <FaUserPlus className="create-join-icon" />
+                      Join Class
+                    </button>
+                  )}
+                  
+                  {/* ✅ ADD QUIZ CREATION OPTION FOR TEACHERS */}
+                  {userRole === "teacher" && selectedClass && (
+                    <button 
+                      className="create-join-item"
+                      onClick={() => {
+                        navigate(`/class/${selectedClass._id}/quiz/new`);
+                        setShowCreateJoinDropdown(false);
+                      }}
+                    >
+                      <FaPlus className="create-join-icon" />
+                      Create Quiz
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* USER PROFILE DROPDOWN */}
           <div className="user-profile" ref={userDropdownRef}>
@@ -5247,14 +5344,7 @@ useEffect(() => {
                     
                     {teachingDropdownOpen && (
                       <div className="teaching-dropdown">
-                        <button 
-                          className="review-button"
-                          onClick={() => navigate('/review')}
-                        >
-                          <span className="review-icon">📝</span>
-                          <span className="review-text">To review</span>
-                          <span className="review-badge">{itemsToReview}</span>
-                        </button>
+                        {/* ✅ REMOVED: "To review" button */}
                         
                         <div className="teaching-classes-list">
                           {teachingClasses.map((classData) => (
@@ -5307,6 +5397,7 @@ useEffect(() => {
                 {enrolledDropdownOpen && (
                   <div className="enrolled-dropdown">
                     
+                    {/* ✅ REMOVED: "To review" button for students */}
                     
                     <div className="enrolled-classes-list">
                       {enrolledClasses.slice(0, 8).map((classData) => (
@@ -5371,55 +5462,9 @@ useEffect(() => {
         </div>
       </main>
 
-      {/* MODALS SECTION */}
-      {showCreateModal && (
-        <div className="modal">
-          <div className="modal-content">
-            <h3>Create New Class</h3>
-            <form onSubmit={createClass}>
-              <input
-                type="text"
-                placeholder="Class Name"
-                value={className}
-                onChange={(e) => setClassName(e.target.value)}
-                required
-              />
-              <div className="modal-actions">
-                <button type="submit" className="primary-btn">
-                  <FaPlus className="btn-icon" />
-                  Create
-                </button>
-                <button type="button" onClick={() => setShowCreateModal(false)}>Cancel</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {showJoinModal && (
-        <div className="modal">
-          <div className="modal-content">
-            <h3>Join Class</h3>
-            <form onSubmit={joinClass}>
-              <input
-                type="text"
-                placeholder="Enter Class Code"
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                required
-              />
-              <div className="modal-actions">
-                <button type="submit" className="primary-btn">
-                  <FaUserPlus className="btn-icon" />
-                  Join
-                </button>
-                <button type="button" onClick={() => setShowJoinModal(false)}>Cancel</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
+      {/* ✅ ADDED: MODAL COMPONENTS */}
+      <CreateClassModal />
+      <JoinModal />
       {AnnouncementModal()}
       <DeployExamModal />
       <UnenrollModal />

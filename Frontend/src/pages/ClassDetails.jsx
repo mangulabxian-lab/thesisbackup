@@ -51,7 +51,7 @@ export default function ClassDetails() {
   useEffect(() => {
     const handleNavigationState = () => {
       if (location.state?.activeTab === 'classwork') {
-        console.log("🎯 Setting active tab from navigation state:", location.state);
+        console.log(" Setting active tab from navigation state:", location.state);
         setActiveTab('classwork');
         
         if (location.state.refresh) {
@@ -274,7 +274,7 @@ export default function ClassDetails() {
   // STUDENT QUIZ ACCESS FUNCTION
   const handleStartQuiz = async (examId, examTitle) => {
     try {
-      console.log("🎯 Student starting quiz:", examId, examTitle);
+      console.log(" Student starting quiz:", examId, examTitle);
       
       const response = await getQuizForStudent(examId);
       
@@ -513,7 +513,7 @@ export default function ClassDetails() {
                                 onClick={() => handleStartQuiz(item._id, item.title)}
                                 title={isQuizAvailable ? "Start this quiz" : "Quiz not available yet"}
                               >
-                                🚀 Start Quiz
+                                 Start Quiz
                               </button>
                               {!isQuizAvailable && (
                                 <div className="quiz-info">

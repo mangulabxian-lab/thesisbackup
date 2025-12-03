@@ -345,7 +345,7 @@ const [globalSettings, setGlobalSettings] = useState({
       return;
     }
 
-    console.log('🚀 APPLYING SETTINGS TO STUDENT:', {
+    console.log('APPLYING SETTINGS TO STUDENT:', {
       studentSocketId,
       settings
     });
@@ -457,7 +457,7 @@ const [globalSettings, setGlobalSettings] = useState({
       {/* Global Controls Header */}
       <div className="global-controls-section">
         <div className="section-header">
-          <h3>🎯 Global Proctoring Controls</h3>
+          <h3>Global Proctoring Controls</h3>
           <div className="global-actions">
             <button className="apply-global-btn" onClick={applyGlobalToAll}>
               🌍 Apply to All
@@ -733,7 +733,7 @@ const [globalSettings, setGlobalSettings] = useState({
                         className="apply-settings-btn"
                         onClick={() => applySettingsToStudent(student.socketId)}
                       >
-                        🚀 APPLY THESE SETTINGS TO STUDENT
+                        APPLY THESE SETTINGS TO STUDENT
                       </button>
                       <p className="apply-hint">
                         Student will see these changes immediately and proctoring will be updated
