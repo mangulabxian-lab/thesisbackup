@@ -21,6 +21,8 @@ from collections import defaultdict
 import pytesseract
 from PIL import Image
 import io
+import requests  # ✅ ADDED: For logging violations to backend
+import json     # ✅ ADDED: For JSON payload
 
 # Add near other global variables
 student_attempts = defaultdict(lambda: {
@@ -56,6 +58,36 @@ CORS(app)
 # THEN initialize Socket.IO
 sio = socketio.Server(cors_allowed_origins="*", async_mode='eventlet')
 app_socket = socketio.WSGIApp(sio, app)
+
+# ==================== NEW VIOLATION LOGGING FUNCTION ====================
+def log_violation_to_backend(exam_id, student_socket_id, violation_data):
+    """Log violation details to Node.js backend MongoDB"""
+    try:
+        print(f"📝 Logging violation to backend for student {student_socket_id}")
+        
+        backend_url = "http://localhost:3000/api/exams/log-violation"
+        
+        payload = {
+            "examId": exam_id,
+            "studentSocketId": student_socket_id,
+            "violationType": violation_data.get("detectionType", "unknown"),
+            "message": violation_data.get("message", ""),
+            "severity": violation_data.get("severity", "medium"),
+            "detectionSource": "python",
+            "confidence": violation_data.get("confidence", 0.0),
+            "count": violation_data.get("count", 1)
+        }
+        
+        # Send to Node.js backend
+        response = requests.post(backend_url, json=payload, timeout=5)
+        
+        if response.status_code == 200:
+            print(f"✅ Violation logged to MongoDB: {violation_data.get('detectionType')}")
+        else:
+            print(f"⚠️ Failed to log violation: {response.status_code}")
+            
+    except Exception as e:
+        print(f"❌ Error logging violation to backend: {e}")
 
 # MediaPipe Init - ENHANCED VERSION
 mp_face_detection = mp.solutions.face_detection
@@ -327,6 +359,13 @@ def send_proctoring_alert(exam_id, alert_data):
         print(f"🚨 [DEBUG] send_proctoring_alert called for exam {exam_id}")
         print(f"🚨 [DEBUG] Student Socket ID: {alert_data.get('studentSocketId')}")
         print(f"🚨 [DEBUG] Detection Type: {alert_data.get('detectionType')}")
+        
+        # ✅ ADD THIS: Log violation to MongoDB backend
+        student_socket_id = alert_data.get('studentSocketId')
+        detection_type = alert_data.get('detectionType', 'unknown')
+        
+        if student_socket_id and detection_type:
+            log_violation_to_backend(exam_id, student_socket_id, alert_data)
         
         room = f"exam-{exam_id}"
         student_socket_id = alert_data.get('studentSocketId')
@@ -1918,5 +1957,6 @@ if __name__ == "__main__":
     print("   • Image quality enhancement for better detection")
     print("   • Multiple people detection with position analysis")
     print("   • ALL DETECTION TYPES DEDUCT ATTEMPTS AUTOMATICALLY")
+    print("🔗 VIOLATION LOGGING: Enabled with MongoDB backend integration")
     print("🌐 Access the server at: http://localhost:5000")
     eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5000)), app_socket)

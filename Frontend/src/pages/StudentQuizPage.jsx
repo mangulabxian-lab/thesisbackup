@@ -2410,11 +2410,7 @@ export default function StudentQuizPage() {
       const videoTrack = stream.getVideoTracks()[0];
       const capabilities = videoTrack.getCapabilities();
 
-      if (capabilities.exposureCompensation) {
-        await videoTrack.applyConstraints({
-          advanced: [{ exposureCompensation: -1.0 }]
-        });
-      }
+     
       
       setLocalStream(stream);
       setIsSharingCamera(true);

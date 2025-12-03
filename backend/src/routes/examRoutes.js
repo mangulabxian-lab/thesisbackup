@@ -11,6 +11,7 @@ const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const axios = require('axios');
 const User = require("../models/User");
+const StudentAttempts = require("../models/StudentAttempts"); // Added for violation summary
 
 // ===== INITIALIZE ROUTER FIRST =====
 const router = express.Router();
@@ -46,6 +47,249 @@ const upload = multer({
   },
   limits: {
     fileSize: 10 * 1024 * 1024,
+  }
+});
+
+// ===== VIOLATION LOGGING ENDPOINTS =====
+
+// ✅ ADD VIOLATION LOGGING ENDPOINT
+router.post("/log-violation", async (req, res) => {
+  try {
+    const { examId, studentSocketId, violationType, message, severity, detectionSource, confidence, count } = req.body;
+
+    console.log("📝 Logging violation:", { examId, studentSocketId, violationType });
+
+    // Validate required fields
+    if (!examId || !studentSocketId || !violationType) {
+      return res.status(400).json({
+        success: false,
+        message: "examId, studentSocketId, and violationType are required"
+      });
+    }
+
+    // Find student by socket ID or user ID
+    const StudentExamSession = require('../models/StudentExamSession');
+    const session = await StudentExamSession.findOne({ socketId: studentSocketId });
+    
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Student session not found"
+      });
+    }
+
+    const studentId = session.studentId;
+    
+    // Find or create StudentAttempts
+    let studentAttempts = await StudentAttempts.findOne({ 
+      studentId: studentId, 
+      examId: examId 
+    });
+
+    if (!studentAttempts) {
+      studentAttempts = new StudentAttempts({
+        studentId: studentId,
+        examId: examId,
+        currentAttempts: 0,
+        maxAttempts: 10,
+        attemptsLeft: 10,
+        history: []
+      });
+    }
+
+    // ✅ ENHANCED: Store detailed violation type
+    const violationData = {
+      timestamp: new Date(),
+      violationType: violationType,
+      severity: severity || 'medium',
+      message: message || `${violationType} detected`,
+      detectionSource: detectionSource || 'python',
+      confidence: confidence || 0.0,
+      count: count || 1,
+      attemptsUsed: studentAttempts.currentAttempts + 1,
+      attemptsLeft: studentAttempts.attemptsLeft - 1
+    };
+
+    // Add violation
+    studentAttempts.currentAttempts += 1;
+    studentAttempts.attemptsLeft = Math.max(0, studentAttempts.maxAttempts - studentAttempts.currentAttempts);
+    studentAttempts.history.push(violationData);
+
+    // Keep only last 50 violations
+    if (studentAttempts.history.length > 50) {
+      studentAttempts.history = studentAttempts.history.slice(-50);
+    }
+
+    await studentAttempts.save();
+
+    console.log("✅ Violation logged:", violationType, "for student:", studentId);
+
+    res.json({
+      success: true,
+      message: "Violation logged successfully",
+      data: {
+        violationType: violationType,
+        timestamp: violationData.timestamp,
+        attempts: {
+          current: studentAttempts.currentAttempts,
+          max: studentAttempts.maxAttempts,
+          left: studentAttempts.attemptsLeft
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Log violation error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to log violation"
+    });
+  }
+});
+
+// ✅ ADD THIS: GET DETAILED VIOLATION BREAKDOWN BY STUDENT
+router.get("/:examId/violation-details/:studentId", async (req, res) => {
+  try {
+    const { examId, studentId } = req.params;
+    const teacherId = req.user.id;
+
+    console.log("📊 GETTING DETAILED VIOLATIONS FOR STUDENT:", { examId, studentId });
+
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(examId) || !mongoose.Types.ObjectId.isValid(studentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID format"
+      });
+    }
+
+    // Check if user is teacher for this exam
+    const exam = await Exam.findById(examId);
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam not found"
+      });
+    }
+
+    const classData = await Class.findById(exam.classId);
+    if (!classData || classData.ownerId.toString() !== teacherId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only teachers can view violation details"
+      });
+    }
+
+    // Get student attempts
+    const studentAttempts = await StudentAttempts.findOne({
+      studentId: studentId,
+      examId: examId
+    });
+
+    if (!studentAttempts) {
+      return res.json({
+        success: true,
+        data: {
+          studentId: studentId,
+          violationsByType: {},
+          totalViolations: 0,
+          attempts: {
+            current: 0,
+            max: 10,
+            left: 10
+          }
+        }
+      });
+    }
+
+    // ✅ CRITICAL: Group violations by type
+    const violationsByType = {};
+    
+    studentAttempts.history.forEach(violation => {
+      const type = violation.violationType || 'unknown';
+      
+      if (!violationsByType[type]) {
+        violationsByType[type] = {
+          count: 0,
+          violations: [],
+          latestTimestamp: null
+        };
+      }
+      
+      violationsByType[type].count += (violation.count || 1);
+      violationsByType[type].violations.push({
+        timestamp: violation.timestamp,
+        message: violation.message,
+        severity: violation.severity,
+        confidence: violation.confidence,
+        attemptsUsed: violation.attemptsUsed,
+        attemptsLeft: violation.attemptsLeft
+      });
+      
+      // Update latest timestamp
+      if (!violationsByType[type].latestTimestamp || 
+          new Date(violation.timestamp) > new Date(violationsByType[type].latestTimestamp)) {
+        violationsByType[type].latestTimestamp = violation.timestamp;
+      }
+    });
+
+    // Sort types by count (descending)
+    const sortedViolations = Object.entries(violationsByType)
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([type, data]) => ({
+        type: type,
+        count: data.count,
+        latestTimestamp: data.latestTimestamp,
+        example: data.violations[0]?.message || `${type} violation`
+      }));
+
+    // Get student info
+    const student = await User.findById(studentId).select('name email');
+    
+    // Get completion data
+    const completion = exam.completedBy.find(c => {
+      const compStudentId = c.studentId?._id || c.studentId;
+      return compStudentId && compStudentId.toString() === studentId;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        student: {
+          _id: student._id,
+          name: student.name,
+          email: student.email
+        },
+        exam: {
+          _id: exam._id,
+          title: exam.title,
+          examType: exam.examType
+        },
+        violationsByType: sortedViolations,
+        totalViolations: studentAttempts.currentAttempts,
+        attempts: {
+          current: studentAttempts.currentAttempts,
+          max: studentAttempts.maxAttempts,
+          left: studentAttempts.attemptsLeft
+        },
+        completion: completion ? {
+          score: completion.score,
+          maxScore: completion.maxScore,
+          percentage: completion.percentage,
+          submittedAt: completion.submittedAt
+        } : null,
+        violationHistory: studentAttempts.history.sort((a, b) => 
+          new Date(b.timestamp) - new Date(a.timestamp)
+        )
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Get violation details error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get violation details"
+    });
   }
 });
 
@@ -245,6 +489,181 @@ router.get("/test-comments/:examId", async (req, res) => {
     });
   }
 });
+
+// ===== VIOLATION SUMMARY ROUTES =====
+
+// ✅ GET VIOLATION SUMMARY FOR AN EXAM
+router.get("/:examId/violation-summary", async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const teacherId = req.user.id;
+
+    console.log("📊 GET VIOLATION SUMMARY ROUTE HIT:", { examId, teacherId });
+
+    // Validate examId
+    if (!mongoose.Types.ObjectId.isValid(examId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid exam ID format"
+      });
+    }
+
+    const exam = await Exam.findById(examId)
+      .populate('completedBy.studentId', 'name email')
+      .populate('classId', 'name ownerId');
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam not found"
+      });
+    }
+
+    // Check if user is teacher for this class
+    const classData = exam.classId;
+    if (!classData || classData.ownerId.toString() !== teacherId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only teachers can view violation summaries"
+      });
+    }
+
+    // Get all students in the class
+    const classStudents = await Class.findById(exam.classId).populate('members.userId', 'name email');
+
+    // Get student attempts for this exam
+    const studentAttempts = await StudentAttempts.find({ examId })
+      .populate('studentId', 'name email')
+      .sort({ 'history.timestamp': -1 });
+
+    console.log(`📊 Found ${studentAttempts.length} student attempts for exam`);
+
+    // Get violation data from StudentExamSession (if you have it) or from StudentAttempts
+    let examSessions = [];
+    
+    try {
+      const StudentExamSession = require('../models/StudentExamSession');
+      examSessions = await StudentExamSession.find({ examId })
+        .populate('studentId', 'name email');
+      console.log(`📊 Found ${examSessions.length} exam sessions`);
+    } catch (error) {
+      console.log("⚠️ StudentExamSession model not available, using only attempts");
+    }
+
+    // Combine data from StudentAttempts and StudentExamSession
+    const studentsData = [];
+
+    // Process each student in the class
+    const allStudents = classStudents.members.filter(m => m.role === 'student').map(m => m.userId);
+    
+    for (const student of allStudents) {
+      const studentAttempt = studentAttempts.find(a => 
+        a.studentId && a.studentId._id.toString() === student._id.toString()
+      );
+      const studentSession = examSessions.find(s => 
+        s.studentId && s.studentId._id.toString() === student._id.toString()
+      );
+      
+      // Get violations from StudentAttempts history
+      const violations = studentAttempt ? studentAttempt.history.map(v => ({
+        type: v.violationType || 'unknown',
+        severity: v.severity || 'medium',
+        timestamp: v.timestamp,
+        message: v.message || 'Violation detected',
+        detectionSource: v.detectionSource || 'auto',
+        confidence: 0.8 // Default confidence
+      })) : [];
+
+      // Add session-specific violations if available
+      if (studentSession && studentSession.violations) {
+        studentSession.violations.forEach(v => {
+          violations.push({
+            type: v.type || 'unknown',
+            severity: v.severity || 'medium',
+            timestamp: v.timestamp || new Date(),
+            message: v.message || 'Session violation',
+            detectionSource: 'session',
+            confidence: v.confidence || 0.7,
+            screenshot: v.screenshot
+          });
+        });
+      }
+
+      // Get completion data
+      const completion = exam.completedBy.find(c => {
+        const studentId = c.studentId?._id || c.studentId;
+        return studentId && studentId.toString() === student._id.toString();
+      });
+
+      studentsData.push({
+        _id: student._id,
+        name: student.name || 'Unknown Student',
+        email: student.email,
+        violations: violations.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), // Newest first
+        hasCompleted: !!completion,
+        score: completion?.score || 0,
+        maxScore: completion?.maxScore || exam.totalPoints,
+        percentage: completion?.percentage || 0,
+        submittedAt: completion?.submittedAt || completion?.completedAt,
+        status: completion ? 'completed' : 'not_started',
+        attemptsUsed: studentAttempt?.currentAttempts || 0,
+        attemptsLeft: studentAttempt?.attemptsLeft || studentAttempt?.maxAttempts || 0
+      });
+    }
+
+    console.log(`📊 Prepared violation summary for ${studentsData.length} students`);
+
+    res.json({
+      success: true,
+      data: {
+        exam: {
+          _id: exam._id,
+          title: exam.title,
+          examType: exam.examType,
+          totalPoints: exam.totalPoints,
+          isLiveClass: exam.isLiveClass
+        },
+        students: studentsData,
+        summary: {
+          totalStudents: studentsData.length,
+          completed: studentsData.filter(s => s.hasCompleted).length,
+          averageScore: studentsData.filter(s => s.hasCompleted).length > 0 
+            ? (studentsData.filter(s => s.hasCompleted).reduce((sum, s) => sum + s.score, 0) / 
+               studentsData.filter(s => s.hasCompleted).reduce((sum, s) => sum + s.maxScore, 0)) * 100
+            : 0,
+          totalViolations: studentsData.reduce((sum, s) => sum + s.violations.length, 0),
+          mostCommonViolation: getMostCommonViolation(studentsData)
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Get violation summary error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get violation summary",
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
+// Helper function to find most common violation
+function getMostCommonViolation(studentsData) {
+  const violationCounts = {};
+  
+  studentsData.forEach(student => {
+    student.violations.forEach(violation => {
+      violationCounts[violation.type] = (violationCounts[violation.type] || 0) + 1;
+    });
+  });
+  
+  const mostCommon = Object.entries(violationCounts).sort((a, b) => b[1] - a[1])[0];
+  
+  return mostCommon ? {
+    type: mostCommon[0],
+    count: mostCommon[1]
+  } : { type: 'none', count: 0 };
+}
 
 // ===== TEST ROUTE =====
 router.get("/test-session-routes", async (req, res) => {
@@ -1960,244 +2379,16 @@ router.get("/health", (req, res) => {
       // ✅ LIVE CLASS ROUTES
       "POST /:examId/start-live-class",
       "POST /:examId/join-live-class",
-      "POST /:examId/end-live-class"
+      "POST /:examId/end-live-class",
+      // ✅ VIOLATION SUMMARY ROUTE
+      "GET /:examId/violation-summary",
+      // ✅ NEW VIOLATION LOGGING ROUTES
+      "POST /log-violation",
+      "GET /:examId/violation-details/:studentId"
     ],
     timestamp: new Date().toISOString()
   });
 });
-
-// ===== HELPER FUNCTIONS =====
-function parseFormattedDocument(text) {
-  console.log("🔄 STARTING ENHANCED PARSING...");
-  
-  const questions = [];
-  const lines = text.split('\n').map(line => line.trim()).filter(line => line);
-  
-  let currentQuestion = null;
-  let questionCounter = 0;
-
-  console.log("📄 Total lines to process:", lines.length);
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    console.log(`📖 Line ${i}: "${line}"`);
-
-    // Skip empty lines
-    if (!line) continue;
-
-    // Detect question with number (1., 2., etc.)
-    const questionMatch = line.match(/^(\d+)\.\s*(.+)$/);
-    if (questionMatch) {
-      // Save previous question
-      if (currentQuestion) {
-        questions.push(currentQuestion);
-        console.log("💾 Saved question:", {
-          title: currentQuestion.title?.substring(0, 30),
-          type: currentQuestion.type,
-          options: currentQuestion.options,
-          answer: currentQuestion.correctAnswer ?? currentQuestion.correctAnswers ?? currentQuestion.answerKey
-        });
-      }
-      
-      questionCounter++;
-      currentQuestion = {
-        type: 'multiple-choice', // default type
-        title: questionMatch[2],
-        required: false,
-        points: 1,
-        options: [],
-        correctAnswer: null,
-        correctAnswers: [],
-        answerKey: '',
-        order: questionCounter - 1
-      };
-      
-      console.log("❓ New question started:", currentQuestion.title.substring(0, 50));
-      continue;
-    }
-
-    // Detect options (A), B), C), D) - FIXED REGEX
-    const optionMatch = line.match(/^([A-D])[\)\.]\s*(.+)$/i);
-    if (optionMatch && currentQuestion) {
-      const optionText = optionMatch[2].trim();
-      currentQuestion.options.push(optionText);
-      console.log("📝 Added option:", optionMatch[1], optionText);
-      continue;
-    }
-
-    // Detect ANSWER (single choice) - CASE INSENSITIVE
-    const answerMatch = line.match(/^ANSWER:\s*(.+)$/i);
-    if (answerMatch && currentQuestion) {
-      const answerValue = answerMatch[1].trim();
-      console.log("🎯 Processing ANSWER:", answerValue);
-      
-      // Check if there are options to determine question type
-      if (currentQuestion.options.length > 0) {
-        // Has options = multiple choice or checkboxes
-        if (answerValue.includes(',')) {
-          // Multiple answers = checkboxes
-          const answers = answerValue.split(',').map(a => a.trim().toUpperCase());
-          const answerIndices = answers.map(a => 'ABCD'.indexOf(a)).filter(idx => idx !== -1);
-          
-          if (answerIndices.length > 0) {
-            currentQuestion.correctAnswers = answerIndices;
-            currentQuestion.type = 'checkboxes';
-            console.log("✅ Set CHECKBOX answers:", answers, "-> indices:", answerIndices);
-          }
-        } else {
-          // Single answer = multiple choice
-          const answerIndex = 'ABCD'.indexOf(answerValue.toUpperCase());
-          if (answerIndex !== -1) {
-            currentQuestion.correctAnswer = answerIndex;
-            currentQuestion.type = 'multiple-choice';
-            console.log("✅ Set MULTIPLE-CHOICE answer:", answerValue, "-> index:", answerIndex);
-          } else {
-            console.log("❌ Invalid answer for multiple-choice:", answerValue);
-          }
-        }
-      } else {
-        // No options = text answer
-        currentQuestion.answerKey = answerValue;
-        // Auto-detect short vs paragraph based on length
-        currentQuestion.type = answerValue.length > 50 ? 'paragraph' : 'short-answer';
-        console.log("✅ Set TEXT answer:", currentQuestion.type, "->", answerValue);
-      }
-      continue;
-    }
-
-    // Also detect "ANSWERS:" format for checkboxes
-    const answersMatch = line.match(/^ANSWERS?:\s*([A-D,\s]+)$/i);
-    if (answersMatch && currentQuestion && currentQuestion.options.length > 0) {
-      const answersStr = answersMatch[1];
-      const answers = answersStr.split(',').map(a => a.trim().toUpperCase());
-      const answerIndices = answers.map(a => 'ABCD'.indexOf(a)).filter(idx => idx !== -1);
-      
-      if (answerIndices.length > 0) {
-        currentQuestion.correctAnswers = answerIndices;
-        currentQuestion.type = 'checkboxes';
-        console.log("✅ Set CHECKBOX answers (ANSWERS: format):", answers, "-> indices:", answerIndices);
-      }
-      continue;
-    }
-
-    // Detect POINTS
-    const pointsMatch = line.match(/^POINTS?:\s*(\d+)/i);
-    if (pointsMatch && currentQuestion) {
-      currentQuestion.points = parseInt(pointsMatch[1]);
-      console.log("⭐ Set points:", currentQuestion.points);
-      continue;
-    }
-
-    // If line looks like an option but didn't match regex, try to add it
-    if (currentQuestion && line.match(/^[A-D][\s\.].+/i) && !line.match(/ANSWER|POINTS/i)) {
-      const optionText = line.substring(2).trim();
-      if (optionText && currentQuestion.options.length < 4) {
-        currentQuestion.options.push(optionText);
-        console.log("📝 Added inferred option:", line.substring(0, 2), optionText);
-      }
-    }
-  }
-
-  // Add the last question
-  if (currentQuestion && currentQuestion.title) {
-    questions.push(currentQuestion);
-    console.log("💾 Saved final question:", {
-      title: currentQuestion.title?.substring(0, 30),
-      type: currentQuestion.type,
-      options: currentQuestion.options,
-      answer: currentQuestion.correctAnswer ?? currentQuestion.correctAnswers ?? currentQuestion.answerKey
-    });
-  }
-
-  console.log("🎉 PARSING COMPLETE. Total questions:", questions.length);
-  
-  // Final detailed debug log
-  questions.forEach((q, index) => {
-    console.log(`📊 FINAL Question ${index + 1}:`, {
-      type: q.type,
-      title: q.title?.substring(0, 40) + '...',
-      options: q.options,
-      correctAnswer: q.correctAnswer,
-      correctAnswers: q.correctAnswers,
-      answerKey: q.answerKey,
-      points: q.points
-    });
-  });
-  
-  return questions;
-}
-
-// ✅ DOCX PARSING FUNCTION
-const parseDOCX = async (filePath) => {
-  try {
-    const result = await mammoth.extractRawText({ path: filePath });
-    const text = result.value;
-    
-    console.log("📝 Extracted DOCX text length:", text.length);
-    
-    // Try the improved formatted parsing
-    const formattedQuestions = parseFormattedDocument(text);
-    
-    if (formattedQuestions.length > 0) {
-      console.log("✅ Successfully parsed formatted document:", formattedQuestions.length, "questions");
-      return formattedQuestions;
-    }
-    
-    // Enhanced fallback parsing
-    console.log("⚠️ No formatted questions found, using enhanced fallback parsing");
-    const questions = [];
-    const lines = text.split('\n');
-    let currentQuestion = null;
-    
-    lines.forEach((line, index) => {
-      line = line.trim();
-      if (!line) return;
-      
-      // Detect question lines
-      const isQuestion = line.endsWith('?') || /^\d+\./.test(line) || (line.length > 20 && /^[A-Z]/.test(line));
-      
-      if (isQuestion) {
-        // Save previous question
-        if (currentQuestion) {
-          questions.push(currentQuestion);
-        }
-        
-        currentQuestion = {
-          type: "essay", // default type
-          title: line,
-          required: false,
-          points: 1,
-          options: [],
-          correctAnswer: null,
-          correctAnswers: [],
-          answerKey: "",
-          order: questions.length
-        };
-      }
-      // Look for answer patterns in subsequent lines
-      else if (currentQuestion && line.match(/^(Answer|ANSWER)/i)) {
-        const answerMatch = line.match(/^(?:Answer|ANSWER):\s*(.+)$/i);
-        if (answerMatch) {
-          currentQuestion.answerKey = answerMatch[1];
-          // Auto-detect type based on answer length
-          currentQuestion.type = answerMatch[1].length > 50 ? "paragraph" : "short-answer";
-        }
-      }
-    });
-    
-    // Add the last question
-    if (currentQuestion) {
-      questions.push(currentQuestion);
-    }
-    
-    console.log("📝 Fallback parsing found:", questions.length, "questions");
-    return questions;
-    
-  } catch (error) {
-    console.error("DOCX parsing error:", error);
-    throw error;
-  }
-};
 
 // ===== ASYNC EXAM TIMER MANAGEMENT =====
 // Ilagay ito SA BABA bago ang module.exports
@@ -2491,5 +2682,238 @@ router.get("/:classId/export-grades", async (req, res) => {
     });
   }
 });
+
+// ===== HELPER FUNCTIONS =====
+function parseFormattedDocument(text) {
+  console.log("🔄 STARTING ENHANCED PARSING...");
+  
+  const questions = [];
+  const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+  
+  let currentQuestion = null;
+  let questionCounter = 0;
+
+  console.log("📄 Total lines to process:", lines.length);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    console.log(`📖 Line ${i}: "${line}"`);
+
+    // Skip empty lines
+    if (!line) continue;
+
+    // Detect question with number (1., 2., etc.)
+    const questionMatch = line.match(/^(\d+)\.\s*(.+)$/);
+    if (questionMatch) {
+      // Save previous question
+      if (currentQuestion) {
+        questions.push(currentQuestion);
+        console.log("💾 Saved question:", {
+          title: currentQuestion.title?.substring(0, 30),
+          type: currentQuestion.type,
+          options: currentQuestion.options,
+          answer: currentQuestion.correctAnswer ?? currentQuestion.correctAnswers ?? currentQuestion.answerKey
+        });
+      }
+      
+      questionCounter++;
+      currentQuestion = {
+        type: 'multiple-choice', // default type
+        title: questionMatch[2],
+        required: false,
+        points: 1,
+        options: [],
+        correctAnswer: null,
+        correctAnswers: [],
+        answerKey: '',
+        order: questionCounter - 1
+      };
+      
+      console.log("❓ New question started:", currentQuestion.title.substring(0, 50));
+      continue;
+    }
+
+    // Detect options (A), B), C), D) - FIXED REGEX
+    const optionMatch = line.match(/^([A-D])[\)\.]\s*(.+)$/i);
+    if (optionMatch && currentQuestion) {
+      const optionText = optionMatch[2].trim();
+      currentQuestion.options.push(optionText);
+      console.log("📝 Added option:", optionMatch[1], optionText);
+      continue;
+    }
+
+    // Detect ANSWER (single choice) - CASE INSENSITIVE
+    const answerMatch = line.match(/^ANSWER:\s*(.+)$/i);
+    if (answerMatch && currentQuestion) {
+      const answerValue = answerMatch[1].trim();
+      console.log("🎯 Processing ANSWER:", answerValue);
+      
+      // Check if there are options to determine question type
+      if (currentQuestion.options.length > 0) {
+        // Has options = multiple choice or checkboxes
+        if (answerValue.includes(',')) {
+          // Multiple answers = checkboxes
+          const answers = answerValue.split(',').map(a => a.trim().toUpperCase());
+          const answerIndices = answers.map(a => 'ABCD'.indexOf(a)).filter(idx => idx !== -1);
+          
+          if (answerIndices.length > 0) {
+            currentQuestion.correctAnswers = answerIndices;
+            currentQuestion.type = 'checkboxes';
+            console.log("✅ Set CHECKBOX answers:", answers, "-> indices:", answerIndices);
+          }
+        } else {
+          // Single answer = multiple choice
+          const answerIndex = 'ABCD'.indexOf(answerValue.toUpperCase());
+          if (answerIndex !== -1) {
+            currentQuestion.correctAnswer = answerIndex;
+            currentQuestion.type = 'multiple-choice';
+            console.log("✅ Set MULTIPLE-CHOICE answer:", answerValue, "-> index:", answerIndex);
+          } else {
+            console.log("❌ Invalid answer for multiple-choice:", answerValue);
+          }
+        }
+      } else {
+        // No options = text answer
+        currentQuestion.answerKey = answerValue;
+        // Auto-detect short vs paragraph based on length
+        currentQuestion.type = answerValue.length > 50 ? 'paragraph' : 'short-answer';
+        console.log("✅ Set TEXT answer:", currentQuestion.type, "->", answerValue);
+      }
+      continue;
+    }
+
+    // Also detect "ANSWERS:" format for checkboxes
+    const answersMatch = line.match(/^ANSWERS?:\s*([A-D,\s]+)$/i);
+    if (answersMatch && currentQuestion && currentQuestion.options.length > 0) {
+      const answersStr = answersMatch[1];
+      const answers = answersStr.split(',').map(a => a.trim().toUpperCase());
+      const answerIndices = answers.map(a => 'ABCD'.indexOf(a)).filter(idx => idx !== -1);
+      
+      if (answerIndices.length > 0) {
+        currentQuestion.correctAnswers = answerIndices;
+        currentQuestion.type = 'checkboxes';
+        console.log("✅ Set CHECKBOX answers (ANSWERS: format):", answers, "-> indices:", answerIndices);
+      }
+      continue;
+    }
+
+    // Detect POINTS
+    const pointsMatch = line.match(/^POINTS?:\s*(\d+)/i);
+    if (pointsMatch && currentQuestion) {
+      currentQuestion.points = parseInt(pointsMatch[1]);
+      console.log("⭐ Set points:", currentQuestion.points);
+      continue;
+    }
+
+    // If line looks like an option but didn't match regex, try to add it
+    if (currentQuestion && line.match(/^[A-D][\s\.].+/i) && !line.match(/ANSWER|POINTS/i)) {
+      const optionText = line.substring(2).trim();
+      if (optionText && currentQuestion.options.length < 4) {
+        currentQuestion.options.push(optionText);
+        console.log("📝 Added inferred option:", line.substring(0, 2), optionText);
+      }
+    }
+  }
+
+  // Add the last question
+  if (currentQuestion && currentQuestion.title) {
+    questions.push(currentQuestion);
+    console.log("💾 Saved final question:", {
+      title: currentQuestion.title?.substring(0, 30),
+      type: currentQuestion.type,
+      options: currentQuestion.options,
+      answer: currentQuestion.correctAnswer ?? currentQuestion.correctAnswers ?? currentQuestion.answerKey
+    });
+  }
+
+  console.log("🎉 PARSING COMPLETE. Total questions:", questions.length);
+  
+  // Final detailed debug log
+  questions.forEach((q, index) => {
+    console.log(`📊 FINAL Question ${index + 1}:`, {
+      type: q.type,
+      title: q.title?.substring(0, 40) + '...',
+      options: q.options,
+      correctAnswer: q.correctAnswer,
+      correctAnswers: q.correctAnswers,
+      answerKey: q.answerKey,
+      points: q.points
+    });
+  });
+  
+  return questions;
+}
+
+// ✅ DOCX PARSING FUNCTION
+const parseDOCX = async (filePath) => {
+  try {
+    const result = await mammoth.extractRawText({ path: filePath });
+    const text = result.value;
+    
+    console.log("📝 Extracted DOCX text length:", text.length);
+    
+    // Try the improved formatted parsing
+    const formattedQuestions = parseFormattedDocument(text);
+    
+    if (formattedQuestions.length > 0) {
+      console.log("✅ Successfully parsed formatted document:", formattedQuestions.length, "questions");
+      return formattedQuestions;
+    }
+    
+    // Enhanced fallback parsing
+    console.log("⚠️ No formatted questions found, using enhanced fallback parsing");
+    const questions = [];
+    const lines = text.split('\n');
+    let currentQuestion = null;
+    
+    lines.forEach((line, index) => {
+      line = line.trim();
+      if (!line) return;
+      
+      // Detect question lines
+      const isQuestion = line.endsWith('?') || /^\d+\./.test(line) || (line.length > 20 && /^[A-Z]/.test(line));
+      
+      if (isQuestion) {
+        // Save previous question
+        if (currentQuestion) {
+          questions.push(currentQuestion);
+        }
+        
+        currentQuestion = {
+          type: "essay", // default type
+          title: line,
+          required: false,
+          points: 1,
+          options: [],
+          correctAnswer: null,
+          correctAnswers: [],
+          answerKey: "",
+          order: questions.length
+        };
+      }
+      // Look for answer patterns in subsequent lines
+      else if (currentQuestion && line.match(/^(Answer|ANSWER)/i)) {
+        const answerMatch = line.match(/^(?:Answer|ANSWER):\s*(.+)$/i);
+        if (answerMatch) {
+          currentQuestion.answerKey = answerMatch[1];
+          // Auto-detect type based on answer length
+          currentQuestion.type = answerMatch[1].length > 50 ? "paragraph" : "short-answer";
+        }
+      }
+    });
+    
+    // Add the last question
+    if (currentQuestion) {
+      questions.push(currentQuestion);
+    }
+    
+    console.log("📝 Fallback parsing found:", questions.length, "questions");
+    return questions;
+    
+  } catch (error) {
+    console.error("DOCX parsing error:", error);
+    throw error;
+  }
+};
 
 module.exports = router;

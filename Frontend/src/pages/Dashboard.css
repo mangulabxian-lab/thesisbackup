@@ -7130,3 +7130,150 @@ a:focus {
 .exam-menu-item.delete {
   color: #ef4444;
 }
+/* View Summary Button Styles */
+.action-btn.summary {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.action-btn.summary:hover {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.action-btn.summary:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Exam card summary button position */
+.exam-card .exam-action-button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+/* Violation Summary Menu Item */
+.exam-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #374151;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.exam-menu-item:hover {
+  background-color: #f3f4f6;
+}
+
+.exam-menu-item.delete {
+  color: #dc2626;
+}
+
+.exam-menu-item.delete:hover {
+  background-color: #fef2f2;
+}
+
+.menu-item-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Violation Summary Card Info */
+.exam-card {
+  position: relative;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+  transition: all 0.2s;
+}
+
+.exam-card:hover {
+  border-color: #d1d5db;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.exam-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.exam-title-section {
+  flex: 1;
+  margin-right: 8px;
+}
+
+.exam-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 4px 0;
+}
+
+.exam-description {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin: 0 0 8px 0;
+}
+
+.exam-status {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.exam-status.posted {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.exam-status.draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.exam-status.ended {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Type badge */
+.exam-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+/* Add some spacing for the menu button */
+.exam-actions-dropdown {
+  position: relative;
+}

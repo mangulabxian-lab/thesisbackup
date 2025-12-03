@@ -324,6 +324,21 @@ export const getExamDetails = async (examId) => {
   return response.data;
 };
 
+// ===== VIOLATION SUMMARY API =====
+export const getViolationSummary = async (examId) => {
+  try {
+    console.log('📊 Fetching violation summary for exam:', examId);
+    const response = await api.get(`/exams/${examId}/violation-summary`);
+    return response.data;
+  } catch (error) {
+    console.error('❌ Failed to fetch violation summary:', error);
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Failed to fetch violation summary'
+    };
+  }
+};
+
 // ===== COMPLETION TRACKING API =====
 export const markExamAsCompleted = async (examId, completionData) => {
   const response = await api.post(`/exams/${examId}/complete`, completionData);

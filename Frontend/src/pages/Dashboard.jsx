@@ -12,8 +12,8 @@ import "./Dashboard.css";
 import io from 'socket.io-client'; // ✅ ADDED: Import socket.io for real-time updates
 import * as XLSX from 'xlsx'; // ✅ ADDED: Import for Excel export
 
-// ✅ NOTIFICATION BELL IMPORT REMOVED
-// ✅ CHATFORUM IMPORT REMOVED
+// ✅ ADDED: Import ViolationSummaryModal
+import ViolationSummaryModal from '../components/ViolationSummaryModal';
 
 // Utility function to format exam type display
 const getExamTypeDisplay = (exam) => {
@@ -288,6 +288,10 @@ export default function Dashboard() {
   const [todoActiveTab, setTodoActiveTab] = useState("assigned");
   const [todoLoading, setTodoLoading] = useState(false);
 
+  // ===== VIOLATION SUMMARY MODAL STATE =====
+  const [showViolationSummary, setShowViolationSummary] = useState(false);
+  const [selectedExamForSummary, setSelectedExamForSummary] = useState(null);
+
   // ===== REFS FOR CLICK OUTSIDE DETECTION =====
   const userDropdownRef = useRef(null);
   const createJoinDropdownRef = useRef(null);
@@ -302,6 +306,13 @@ export default function Dashboard() {
   const teachingClasses = classes.filter(classData => classData.userRole === "teacher" || classData.isTeacher);
   const enrolledClasses = classes.filter(classData => classData.userRole === "student" || !classData.isTeacher);
   const allClasses = [...classes];
+
+  // ===== VIOLATION SUMMARY HANDLER =====
+  const handleViewViolationSummary = (exam) => {
+    console.log('📊 Viewing violation summary for exam:', exam._id, exam.title);
+    setSelectedExamForSummary(exam);
+    setShowViolationSummary(true);
+  };
 
   // ===== FIXED: JOIN CLASS FUNCTION WITH BETTER ERROR HANDLING =====
   const joinClass = async (e) => {
@@ -4597,6 +4608,10 @@ const renderGradesTab = () => {
       const examTypeDisplay = getExamTypeDisplay(exam);
       const actionButton = getExamActionButton(exam, selectedClass?.userRole, user._id);
       
+      // ✅ ADD THIS: Check if teacher can view summary (exam is completed/has submissions)
+      const canViewSummary = selectedClass?.userRole === "teacher" && 
+        (exam.completedBy?.length > 0 || exam.isActive === false);
+      
       return (
         <div key={exam._id} className="exam-card">
           <div className="exam-card-header">
@@ -4616,7 +4631,7 @@ const renderGradesTab = () => {
               </div>
             </div>
             
-            {/* ✅ FIXED: TEACHER ACTIONS - PROPERLY POSITIONED */}
+            {/* ✅ ADD THIS: VIOLATION SUMMARY BUTTON FOR TEACHERS */}
             {selectedClass?.userRole === "teacher" && (
               <div className="exam-actions-dropdown">
                 <button 
@@ -4649,9 +4664,10 @@ const renderGradesTab = () => {
                       border: '1px solid #e5e7eb',
                       borderRadius: '6px',
                       boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                      minWidth: '150px'
+                      minWidth: '180px'
                     }}
                   >
+                    {/* Edit Button */}
                     <button 
                       className="exam-menu-item"
                       onClick={(e) => {
@@ -4662,6 +4678,24 @@ const renderGradesTab = () => {
                       <FaEdit className="menu-item-icon" />
                       Edit
                     </button>
+                    
+                    {/* VIOLATION SUMMARY BUTTON */}
+                    {canViewSummary && (
+                      <button 
+                        className="exam-menu-item"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewViolationSummary(exam);
+                          setShowQuizMenu(null);
+                        }}
+                      >
+                        <svg className="menu-item-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        View Detection Summary
+                      </button>
+                    )}
+                    
                     {exam.examType === 'live-class' ? (
                       <>
                         {exam.isActive ? (
@@ -4719,6 +4753,8 @@ const renderGradesTab = () => {
                         )}
                       </>
                     )}
+                    
+                    {/* Delete Button */}
                     <button 
                       className="exam-menu-item delete"
                       onClick={(e) => handleDeleteQuizClick(exam, e)}
@@ -5472,6 +5508,20 @@ const renderGradesTab = () => {
       <RestoreModal />
       <SettingsModal />
       <DeleteConfirmationModal />
+
+      {/* ✅ ADDED: Violation Summary Modal */}
+      {showViolationSummary && selectedExamForSummary && (
+        <ViolationSummaryModal
+          isOpen={showViolationSummary}
+          onClose={() => {
+            setShowViolationSummary(false);
+            setSelectedExamForSummary(null);
+          }}
+          examId={selectedExamForSummary._id}
+          examTitle={selectedExamForSummary.title}
+          examType={selectedExamForSummary.examType || 'asynchronous'}
+        />
+      )}
     </div>
   );
 }
